@@ -242,6 +242,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "numpy" },
+    { name = "requests" },
     { name = "tiktoken" },
     { name = "torch" },
 ]
@@ -249,6 +250,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "numpy", specifier = ">=2.5.4" },
+    { name = "requests", specifier = ">=2.34.2" },
     { name = "tiktoken", specifier = ">=0.14.0" },
     { name = "torch", specifier = ">=2.15.0" },
 ]
