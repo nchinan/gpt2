@@ -1,12 +1,14 @@
-import os
-import requests
+import argparse
 import tiktoken
 import torch
 
 from torch.utils.data import Dataset, DataLoader
 from tqdm import tqdm
 
-from gpt2.model import GPTModel
+from corpus import CORPORA, load_corpus
+from gpt2.model import GPT2Model
+from model_factory import GPT2_MODELS, gpt2_train_config, resolve_size, save_custom_model, validate_prefix
+from model_stats import print_model_stats, print_total_params_bf16, print_total_params_f32
 
 
 class GPTDatasetV1(Dataset):
@@ -91,31 +93,29 @@ def train_model_simple(model, train_loader, optimizer, device, num_epochs):
             progress.set_postfix(loss=f"{loss.item():.4f}")
 
 
-def main(gpt_config, settings):
+def main(gpt_config, settings, corpus="the-verdict"):
     torch.manual_seed(123)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
+    print(f"Training on: {device}")
 
     ##############################
     # Download data if necessary
     ##############################
 
-    file_path = "the-verdict.txt"
-    url = "https://raw.githubusercontent.com/rasbt/LLMs-from-scratch/main/ch02/01_main-chapter-code/the-verdict.txt"
-
-    if not os.path.exists(file_path):
-        response = requests.get(url, timeout=30)
-        response.raise_for_status()
-        text_data = response.text
-        with open(file_path, "w", encoding="utf-8") as file:
-            file.write(text_data)
-    else:
-        with open(file_path, "r", encoding="utf-8") as file:
-            text_data = file.read()
+    text_data = load_corpus(corpus)  # cached in corpus/<name>.txt
     ##############################
     # Initialize model
     ##############################
 
-    model = GPTModel(gpt_config)
+    model = GPT2Model(gpt_config)
+    print_model_stats(model)
+    print("Estimated training memory (params + grads + buffers):")
+    print_total_params_f32(model)
+    print_total_params_bf16(model)
     model.to(device)  # no assignment model = model.to(device) necessary for nn.Module classes
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=settings["learning_rate"], weight_decay=settings["weight_decay"]
@@ -145,19 +145,32 @@ def main(gpt_config, settings):
 
 
 if __name__ == "__main__":
-    GPT_CONFIG_124M = {
-        "vocab_size": 50257,  # Vocabulary size
-        "context_length": 256,  # Shortened context length (orig: 1024)
-        "emb_dim": 768,  # Embedding dimension
-        "n_heads": 12,  # Number of attention heads
-        "n_layers": 12,  # Number of layers
-        "drop_rate": 0.1,  # Dropout rate
-        "qkv_bias": False  # Query-key-value bias
-    }
+    parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+                                     description="Pretrain a model and save it to models/<prefix>-<model>/<size>.")
+    parser.add_argument("--model-prefix", required=True,
+                        help="Your name for this model; saved to models/<prefix>-<model>/<size>")
+    parser.add_argument("--model", default="gpt2", choices=["gpt2"], help="Model architecture to train")
+    parser.add_argument("--size", default="124M", help="gpt2: " + ", ".join(GPT2_MODELS))
+    parser.add_argument("--corpus", default="the-verdict", choices=list(CORPORA),
+                        help="Training text, downloaded to corpus/<name>.txt on first use")
+    parser.add_argument("--epochs", type=int, default=10, help="Number of passes over the training corpus")
+    args = parser.parse_args()
+
+    if args.epochs < 1:
+        parser.error("--epochs must be at least 1")
+
+    try:
+        size = resolve_size(args.model, args.size)
+        validate_prefix(args.model_prefix)
+    except ValueError as e:
+        parser.error(str(e))
+
+    # Shared with generate.py so an untrained --model-prefix model has the same architecture
+    GPT_CONFIG = gpt2_train_config(size)
 
     OTHER_SETTINGS = {
         "learning_rate": 5e-4,
-        "num_epochs": 10,
+        "num_epochs": args.epochs,
         "batch_size": 2,
         "weight_decay": 0.1
     }
@@ -166,9 +179,7 @@ if __name__ == "__main__":
     # Initiate training
     ###########################
 
-    model = main(GPT_CONFIG_124M, OTHER_SETTINGS)
+    model = main(GPT_CONFIG, OTHER_SETTINGS, corpus=args.corpus)
 
-    # Save and load model
-    torch.save(model.state_dict(), "model.pth")
-    model = GPTModel(GPT_CONFIG_124M)
-    model.load_state_dict(torch.load("model.pth", weights_only=True))
+    path = save_custom_model(model, GPT_CONFIG, args.model, size, args.model_prefix)
+    print(f"Saved model to {path}")

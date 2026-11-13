@@ -8,8 +8,12 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
+    "huggingface-hub>=2.4.0",
+    "modal>=1.6.4",
     "numpy>=2.5.4",
+    "pyarrow>=26.0.1",
     "requests>=2.34.2",
+    "sentencepiece>=0.2.3",
     "tiktoken>=0.14.0",
     "torch>=2.15.0",
     "tqdm>=4.70.1",

@@ -1,8 +1,10 @@
 import argparse
-import torch
-import tiktoken
+import time
 
-from gpt2.model import GPTModel
+import torch
+
+from model_factory import SIZES, create_model, resolve_size, validate_prefix
+from model_stats import print_model_stats
 
 def text_to_token_ids(text, tokenizer):
     encoded = tokenizer.encode(text)
@@ -60,57 +62,67 @@ def generate(model, idx, max_new_tokens, context_size, temperature=0.0, top_k=No
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                     description="Generate text with a pretrained GPT-2 model.")
+                                     description="Generate text with a pretrained model.")
+    parser.add_argument("--model", default="gpt2", choices=list(SIZES), help="Model family")
+    parser.add_argument("--size", default="124M",
+                        help="; ".join(f"{m}: {', '.join(s)}" for m, s in SIZES.items()))
+    parser.add_argument("--model-prefix", default=None,
+                        help="Load your trained model from models/<prefix>-<model>/<size> "
+                             "instead of the pretrained models/<model>/<size>")
     parser.add_argument(
         "--prompt",
         default="Every effort moves you",
         help="Prompt text used to seed the generation."
     )
 
-    parser.add_argument(
-        "--model",
-        default="",
-        help="Model file"
-    )
-
     args = parser.parse_args()
 
-    BASE_CONFIG = {
-        "vocab_size": 50257,    # Vocabulary size
-        "context_length": 256, # Context length
-        "drop_rate": 0.0,       # Dropout rate
-        "qkv_bias": False        # Query-key-value bias
-    }
+    try:
+        size = resolve_size(args.model, args.size)
+        if args.model_prefix:
+            validate_prefix(args.model_prefix)
+    except ValueError as e:
+        parser.error(str(e))
 
-    model_configs = {
-        "gpt2-small (124M)": {"emb_dim": 768, "n_layers": 12, "n_heads": 12},
-        "gpt2-medium (355M)": {"emb_dim": 1024, "n_layers": 24, "n_heads": 16},
-        "gpt2-large (774M)": {"emb_dim": 1280, "n_layers": 36, "n_heads": 20},
-        "gpt2-xl (1558M)": {"emb_dim": 1600, "n_layers": 48, "n_heads": 25},
-    }
+    device = torch.device(
+        "cuda" if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available()
+        else "cpu"
+    )
 
-    CHOOSE_MODEL = "gpt2-small (124M)"
+    start = time.perf_counter()
+    try:
+        loaded = create_model(args.model, size, device=device, prefix=args.model_prefix)
+    except (FileNotFoundError, ValueError) as e:
+        parser.exit(1, f"error: {e}\n")
+    load_seconds = time.perf_counter() - start  # includes the download on first use
 
-    BASE_CONFIG.update(model_configs[CHOOSE_MODEL])
-
-    gpt = GPTModel(BASE_CONFIG)
-    if args.model:
-        gpt.load_state_dict(torch.load(args.model, weights_only=True))
-    gpt.eval()
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    gpt.to(device)
-
-    tokenizer = tiktoken.get_encoding("gpt2")
+    print(f"Model: {args.model_prefix + '-' if args.model_prefix else ''}{args.model} {size}")
+    print(f"Load time: {load_seconds:.2f}s")
+    print_model_stats(loaded.model)
+    tokenizer = loaded.tokenizer
     torch.manual_seed(123)
 
+    prompt_ids = text_to_token_ids(args.prompt, tokenizer).to(device)
+
+    start = time.perf_counter()
     token_ids = generate(
-        model=gpt,
-        idx=text_to_token_ids(args.prompt, tokenizer).to(device),
+        model=loaded.model,
+        idx=prompt_ids,
         max_new_tokens=25,
-        context_size=BASE_CONFIG["context_length"],
+        context_size=loaded.config["context_length"],
         top_k=50,
         temperature=1.0
     )
+    # GPU work runs asynchronously; wait for it to finish before stopping the timer
+    if device.type == "cuda":
+        torch.cuda.synchronize()
+    elif device.type == "mps":
+        torch.mps.synchronize()
+    generate_seconds = time.perf_counter() - start
+
+    new_tokens = token_ids.shape[1] - prompt_ids.shape[1]
+    print(f"Generation time: {generate_seconds:.2f}s "
+          f"({new_tokens} tokens, {new_tokens / generate_seconds:.1f} tokens/s)")
 
     print("Output text:\n", token_ids_to_text(token_ids, tokenizer))
