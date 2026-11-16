@@ -2,7 +2,6 @@ import argparse
 
 from model_factory import SIZES, download, resolve_size
 
-
 def main():
     parser = argparse.ArgumentParser(description="Download pretrained model weights into models/<model>/<size>.")
     parser.add_argument("--model", required=True, choices=list(SIZES), help="Model family to download")

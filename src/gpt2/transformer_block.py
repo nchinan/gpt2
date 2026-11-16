@@ -2,16 +2,16 @@ import torch.nn as nn
 
 from .feed_forward import FeedForward
 from .layer_norm import LayerNorm
-from .attention.multihead import MultiHeadAttention
+from .attention.multihead import PyTorchMultiHeadAttention
 
 class TransformerBlock(nn.Module):
 
     def __init__(self, cfg):
         super().__init__()
-        self.attention = MultiHeadAttention(
+        self.attention = PyTorchMultiHeadAttention(
             d_in=cfg["emb_dim"],
             d_out=cfg["emb_dim"],
-            context_length=cfg["context_length"],
+            # context_length=cfg["context_length"],
             num_heads=cfg["n_heads"],
             dropout=cfg["drop_rate"],
             qkv_bias=cfg["qkv_bias"]

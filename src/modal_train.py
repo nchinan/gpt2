@@ -2,6 +2,7 @@
 
     uv run modal run src/modal_train.py --model-prefix wiki --corpus wikitext-2 --epochs 10
     uv run modal run src/modal_train.py --model-prefix wiki --corpus wikitext-2 --gpu A10G
+    uv run modal run src/modal_train.py --model-prefix wiki --corpus wikitext-2 --eval-freq 500
 
 Trained models are also kept in the Modal Volume "gpt2-models", and downloaded corpora in "gpt2-corpus".
 """
@@ -32,11 +33,12 @@ app = modal.App("gpt2-train", image=image)
     timeout=12 * 60 * 60,  # 12 hours
     volumes={f"{REMOTE}/models": models_volume, f"{REMOTE}/corpus": corpus_volume},
 )
-def train(model_prefix: str, size: str, corpus: str, epochs: int) -> str:
+def train(model_prefix: str, size: str, corpus: str, epochs: int, eval_freq: int, eval_iter: int) -> str:
     """Run train.py in the container. Returns the saved model's folder relative to models/."""
     subprocess.run(
         [sys.executable, "src/train.py", "--model-prefix", model_prefix, "--model", "gpt2",
-         "--size", size, "--corpus", corpus, "--epochs", str(epochs)],
+         "--size", size, "--corpus", corpus, "--epochs", str(epochs),
+         "--eval-freq", str(eval_freq), "--eval-iter", str(eval_iter)],
         cwd=REMOTE,
         check=True,
     )
@@ -49,9 +51,10 @@ def train(model_prefix: str, size: str, corpus: str, epochs: int) -> str:
 
 
 @app.local_entrypoint()
-def main(model_prefix: str, size: str = "124M", corpus: str = "the-verdict", epochs: int = 10, gpu: str = "L4"):
+def main(model_prefix: str, size: str = "124M", corpus: str = "the-verdict", epochs: int = 10,
+         gpu: str = "L4", eval_freq: int = 0, eval_iter: int = 5):
     print(f"Training gpt2 {size} on {corpus} for {epochs} epochs on a Modal {gpu} GPU")
-    saved = train.with_options(gpu=gpu).remote(model_prefix, size, corpus, epochs)
+    saved = train.with_options(gpu=gpu).remote(model_prefix, size, corpus, epochs, eval_freq, eval_iter)
 
     # Copy the trained model from the volume to the local models/ folder
     local_dir = os.path.join(ROOT, "models", saved)

@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 
@@ -35,11 +37,33 @@ class GPT2Model(nn.Module):
         # Assigning the Parameter shares the tensor (not a copy), so an update to one is an update to both.
         self.out_head.weight = self.tok_emb.weight
 
-        # Tying means one initialization has to suit both roles. nn.Embedding's default N(0, 1) is fine
-        # for lookups but as an output head it produces huge logits: an untrained model would start at
-        # a loss of ~477 instead of ~10.8 (= ln(50257), a uniform guess over the vocabulary).
-        # GPT-2 uses N(0, 0.02), which keeps the starting logits small. Pretrained weights overwrite this.
+        self._init_weights(cfg["n_layers"])
+
+    def _init_weights(self, n_layers):
+        """GPT-2's initialisation. Pretrained weights overwrite all of this when loaded.
+
+        Tying means one initialisation has to suit both roles. nn.Embedding's default N(0, 1) is fine
+        for lookups but as an output head it produces huge logits: an untrained model would start at
+        a loss of ~477 instead of ~10.8 (= ln(50257), a uniform guess over the vocabulary).
+        So GPT-2 starts token embeddings small, N(0, 0.02), and everything else has to match that scale:
+
+        - Position embeddings N(0, 0.01). Left at the default N(0, 1) they are 50x larger than the token
+          embeddings, so the first layer sees mostly position and barely which token it is reading.
+          Training then stalls at the loss of predicting token frequencies (~7.5 on WikiText-2).
+        - Linear weights N(0, 0.02) and biases zero, instead of PyTorch's random-uniform defaults.
+        - The last layer of each residual branch (attention output and feed-forward output) is scaled
+          down by 1/sqrt(2 * n_layers), because 2 * n_layers branches are added into the residual stream.
+        """
         nn.init.normal_(self.tok_emb.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.pos_emb.weight, mean=0.0, std=0.01)
+
+        residual_std = 0.02 / math.sqrt(2 * n_layers)
+        for name, module in self.named_modules():
+            if isinstance(module, nn.Linear) and module is not self.out_head:  # out_head is tok_emb
+                is_residual_out = name.endswith(("attention.proj", "attention.out_proj", "ff.layers.2"))
+                nn.init.normal_(module.weight, mean=0.0, std=residual_std if is_residual_out else 0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
     def forward(self, in_idx):
         batch_size, seq_len = in_idx.shape
