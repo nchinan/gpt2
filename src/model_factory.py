@@ -13,6 +13,8 @@ from tqdm import tqdm
 from gpt2.model import GPT2Model
 from llama2.model import Llama2Model, LLAMA2_CONFIG_7B
 from llama2.tokenizer import LlamaTokenizer
+from qwen3.model import Qwen3Model, QWEN_CONFIG_06_B
+from qwen3.tokenizer import Qwen3Tokenizer
 
 # Repo-level models/ directory, independent of the current working directory
 MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
@@ -57,7 +59,20 @@ def gpt2_train_config(size):
 LLAMA2_MODELS = {"7b": LLAMA2_CONFIG_7B}
 LLAMA2_FILES = ["consolidated.00.pth", "params.json", "tokenizer.model"]
 
-SIZES = {"gpt2": list(GPT2_MODELS), "llama2": list(LLAMA2_MODELS)}
+##############################
+# Qwen3
+##############################
+
+# size -> (weights file, tokenizer file, architecture config). The .pth files are state dicts already
+# in Qwen3Model's naming, so they load with load_state_dict (Qwen3Model.load is for HF safetensors).
+QWEN3_MODELS = {
+    "0.6b": ("qwen3-0.6B-base.pth", "tokenizer-base.json", QWEN_CONFIG_06_B),
+    "0.6b-reasoning": ("qwen3-0.6B-reasoning.pth", "tokenizer-reasoning.json", QWEN_CONFIG_06_B),
+}
+QWEN3_URL = "https://huggingface.co/rasbt/qwen3-from-scratch/resolve/main/{file_name}"
+QWEN3_BACKUP_URL = "https://f001.backblazeb2.com/file/reasoning-from-scratch/qwen3-0.6B/{file_name}"
+
+SIZES = {"gpt2": list(GPT2_MODELS), "llama2": list(LLAMA2_MODELS), "qwen3": list(QWEN3_MODELS)}
 
 
 @dataclass
@@ -104,6 +119,14 @@ def download_file(url, dest):
     os.replace(tmp, dest)
 
 
+def download_with_backup(url, backup_url, dest):
+    try:
+        download_file(url, dest)
+    except requests.RequestException as e:
+        print(f"Download from {url} failed ({e}); trying {backup_url}", file=sys.stderr)
+        download_file(backup_url, dest)
+
+
 def download_gpt2(size):
     directory = model_dir("gpt2", size)
     file_name = GPT2_MODELS[size][0]
@@ -132,6 +155,20 @@ def download_llama2(size):
     return directory
 
 
+def download_qwen3(size, tokenizer_only=False):
+    directory = model_dir("qwen3", size)
+    model_file, tokenizer_file, _ = QWEN3_MODELS[size]
+    targets = [tokenizer_file] if tokenizer_only else [model_file, tokenizer_file]
+
+    os.makedirs(directory, exist_ok=True)
+    for file_name in targets:
+        path = os.path.join(directory, file_name)
+        if not os.path.exists(path):
+            download_with_backup(QWEN3_URL.format(file_name=file_name),
+                                 QWEN3_BACKUP_URL.format(file_name=file_name), path)
+    return directory
+
+
 def _create_gpt2(size, device):
     file_name, arch = GPT2_MODELS[size]
     directory = download_gpt2(size)
@@ -142,9 +179,33 @@ def _create_gpt2(size, device):
     state_dict = torch.load(os.path.join(directory, file_name), map_location="cpu", weights_only=True)
     # The pretrained checkpoints name the attention layer "att"; our TransformerBlock calls it "attention"
     state_dict = {k.replace(".att.", ".attention."): v for k, v in state_dict.items()}
+    if any(k.endswith(".attention.qkv.weight") for k in model.state_dict()):
+        state_dict = _to_fused_qkv(state_dict)
     model.load_state_dict(state_dict)
 
     return LoadedModel(model.to(device).eval(), tiktoken.get_encoding("gpt2"), config)
+
+
+def _to_fused_qkv(state_dict):
+    """Convert checkpoint attention weights from MultiHeadAttention's layout to PyTorchMultiHeadAttention's.
+
+    The checkpoints have separate W_query/W_key/W_value layers, out_proj and a causal-mask buffer.
+    PyTorchMultiHeadAttention has one qkv layer (query, key, value stacked in that order), proj, and no mask.
+    """
+    converted = {}
+    for key, value in state_dict.items():
+        if key.endswith(".attention.mask") or ".attention.W_key." in key or ".attention.W_value." in key:
+            continue  # mask isn't needed; key/value are merged in with the query below
+        if ".attention.W_query." in key:
+            prefix, param = key.split(".attention.W_query.")
+            converted[f"{prefix}.attention.qkv.{param}"] = torch.cat([
+                state_dict[f"{prefix}.attention.W_query.{param}"],
+                state_dict[f"{prefix}.attention.W_key.{param}"],
+                state_dict[f"{prefix}.attention.W_value.{param}"],
+            ], dim=0)
+        else:
+            converted[key.replace(".attention.out_proj.", ".attention.proj.")] = value
+    return converted
 
 
 def _create_llama2(size, device):
@@ -162,6 +223,24 @@ def _create_llama2(size, device):
     del params
 
     tokenizer = LlamaTokenizer(os.path.join(directory, "tokenizer.model"))
+    return LoadedModel(model.to(device).eval(), tokenizer, config)
+
+
+def _create_qwen3(size, device):
+    directory = download_qwen3(size)
+    model_file, tokenizer_file, config = QWEN3_MODELS[size]
+
+    model = Qwen3Model(config)
+    state_dict = torch.load(os.path.join(directory, model_file), map_location="cpu", weights_only=True)
+    model.load_state_dict(state_dict)
+
+    reasoning = size.endswith("-reasoning")
+    tokenizer = Qwen3Tokenizer(
+        tokenizer_file_path=os.path.join(directory, tokenizer_file),
+        apply_chat_template=reasoning,
+        add_generation_prompt=reasoning,
+        add_thinking=reasoning,
+    )
     return LoadedModel(model.to(device).eval(), tokenizer, config)
 
 
@@ -184,6 +263,8 @@ def save_custom_model(model, config, model_name, size, prefix):
     """Save a trained model and its config to models/<prefix>-<model>/<size>. Returns the directory."""
     directory = model_dir(model_name, size, prefix)
     os.makedirs(directory, exist_ok=True)
+    # torch.compile wraps the model as `_orig_mod`; save the original so keys have no "_orig_mod." prefix
+    model = getattr(model, "_orig_mod", model)
     torch.save(model.state_dict(), os.path.join(directory, CUSTOM_WEIGHTS))
     with open(os.path.join(directory, CUSTOM_CONFIG), "w") as f:
         json.dump(config, f, indent=2)
@@ -209,13 +290,16 @@ def _create_custom(model_name, size, prefix, device):
         with open(config_path) as f:
             config = json.load(f)
         model = _CUSTOM_CLASSES[model_name](config)
-        model.load_state_dict(torch.load(weights_path, map_location="cpu", weights_only=True))
+        state_dict = torch.load(weights_path, map_location="cpu", weights_only=True)
+        # Models saved from a torch.compile'd model before save_custom_model unwrapped it have this prefix
+        state_dict = {k.removeprefix("_orig_mod."): v for k, v in state_dict.items()}
+        model.load_state_dict(state_dict)
 
     return LoadedModel(model.to(device).eval(), _TOKENIZERS[model_name](), config)
 
 
-_DOWNLOADERS = {"gpt2": download_gpt2, "llama2": download_llama2}
-_CREATORS = {"gpt2": _create_gpt2, "llama2": _create_llama2}
+_DOWNLOADERS = {"gpt2": download_gpt2, "llama2": download_llama2, "qwen3": download_qwen3}
+_CREATORS = {"gpt2": _create_gpt2, "llama2": _create_llama2, "qwen3": _create_qwen3}
 
 
 def download(model_name, size):

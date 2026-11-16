@@ -75,6 +75,9 @@ if __name__ == "__main__":
         help="Prompt text used to seed the generation."
     )
 
+    parser.add_argument("--temperature", type=float, default=1.0,
+                        help="Sampling temperature; 0 always picks the most likely token (greedy)")
+
     args = parser.parse_args()
 
     try:
@@ -112,7 +115,7 @@ if __name__ == "__main__":
         max_new_tokens=25,
         context_size=loaded.config["context_length"],
         top_k=50,
-        temperature=1.0
+        temperature=args.temperature
     )
     # GPU work runs asynchronously; wait for it to finish before stopping the timer
     if device.type == "cuda":

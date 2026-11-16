@@ -61,18 +61,44 @@ export HF_ACCESS_TOKEN=hf_...
 uv run python src/generate.py --model llama2 --size 7b --prompt "Every effort moves you"
 ```
 
+### Qwen3
+
+Sizes: `0.6b` (base), `0.6b-reasoning`. Generation only. No token needed.
+
+```bash
+uv run python src/generate.py --model qwen3 --size 0.6b --prompt "The capital of France is" --temperature 0
+
+# The reasoning model wraps the prompt in Qwen's chat template
+uv run python src/generate.py --model qwen3 --size 0.6b-reasoning --prompt "What is 17 * 23?"
+```
+
+`--temperature` (default `1.0`) works with every model. `0` always picks the most likely next token, so the output is the same every run.
+
 ### Download only
 
 ```bash
 uv run python src/download.py --model gpt2 --size 124M
 ```
 
+## Documentation 
+
+* [PyTorch](https://docs.pytorch.org/docs)
+* [Modal](https://modal.com/docs/guide)
+
+## Tools
+
+* [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)
+* [DeepInfra](https://github.com/deepseek-ai/deepinfer)
+
 ## Books
 
 * [Mathematics for Machine Learning, 2020, Deisenroth, Cambridge University Press](https://mml-book.github.io/book/mml-book.pdf)
+* [Deep Learning, 2016, Goodfellow, MIT Press](https://www.deeplearningbook.org)
+* [Reinforcement Learning: An Introduction, 2018, Sutton &amp; Barto, MIT Press](https://mitpress.mit.edu/9780262352703/reinforcement-learning/)
 
 ## Lecture Series
 
+* [MIT 18.06 Linear Algebra, Spring 2005](https://www.youtube.com/playlist?list=PL49CF3715CB9EF31D)
 * [DeepMind x UCL | Deep Learning Lecture Series 2020](https://www.youtube.com/playlist?list=PLqYmG7hTraZCDxZ44o4p3N5Anz3lLRVZF)
 * [DeepMind x UCL | Deep Learning Lecture Series 2021 (Reinforcement Learning)](https://www.youtube.com/playlist?list=PLqYmG7hTraZDVH599EItlEWsUOsJbAodm)
 
@@ -85,10 +111,19 @@ uv run python src/download.py --model gpt2 --size 124M
 * GPT-2 [Language Models are Unsupervised Multitask Learners (2019)](https://cdn.openai.com/better-language-models/language_models_are_unsupervised_multitask_learners.pdf)
 * GPT-3 [Language Models are Few-Shot Learners (2020)](https://arxiv.org/abs/2005.14165)
 * [Llama 2: Open Foundation and Fine-Tuned Chat Models (2023)](https://arxiv.org/abs/2307.09288)
+* [DeepSeekMoE: Towards Ultimate Expert Specialization in Mixture-of-Experts Language Models (2024)](https://arxiv.org/abs/2401.06066)
 * gpt-oss [gpt-oss-120b & gpt-oss-20b Model Card (2025)](https://arxiv.org/abs/2508.10925)
+
+### Reasoning
+
+* [DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning](https://arxiv.org/abs/2501.12948)
 
 ### Optimisations
 
 * [Layer Normalization (2016)](https://arxiv.org/abs/1607.06450)
 * [RoFormer: Enhanced Transformer with Rotary Position Embedding](https://arxiv.org/abs/2104.09864)
 * [Root Mean Square Layer Normalization](https://arxiv.org/abs/1910.07467)
+
+### Infrastructure
+
+* [DeepSeek-V3 Technical Report (2024)](https://arxiv.org/abs/2412.19437)
